@@ -1,7 +1,7 @@
 import { test, expect, mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { isCheap } from './classify'
+import { isCheap, isFollow } from './classify'
 import { cheaper, cost } from './register'
 
 const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
@@ -71,6 +71,27 @@ test('a simple prompt stays on Opus when its cache would expire before the next 
   expect(status.at(-1)).toMatch(/^🧠 claude-opus-5-5 \(keeps its cache\)/)
 })
 
+test('a follow-up stays on the model of the turn it answers', async ($, on) => {
+  mock.clock(on)
+  const { models } = engine(on, ['SIMPLE', 'FOLLOW', 'COMPLEX', 'FOLLOW', 'FOLLOW'], { output_tokens: 100 })
+
+  await turn($, 't0', 'what does ls -la do?')
+  await turn($, 't1', 'ok')
+  await turn($, 't2', 'refactor the auth module')
+  await turn($, 't3', 'yes, do it')
+
+  expect(models).toEqual(['haiku', 'haiku', 'claude-opus-5-5', 'claude-opus-5-5'])
+})
+
+test('a follow-up as the first prompt runs on the session model', async ($, on) => {
+  mock.clock(on)
+  const { models } = engine(on, ['FOLLOW'])
+
+  await turn($, 't0', 'go on')
+
+  expect(models).toEqual(['claude-opus-5-5'])
+})
+
 test('weighs both caches before sending a simple turn to Haiku', () => {
   const now = 100 * MIN
   const at = (context: number, strongAgo: number, cheapAgo = Infinity) =>
@@ -102,4 +123,8 @@ test('parses the router reply, defaulting to the strong model', () => {
   expect(isCheap('COMPLEX')).toBe(false)
   expect(isCheap('I think SIMPLE')).toBe(false)
   expect(isCheap('')).toBe(false)
+  expect(isFollow('FOLLOW')).toBe(true)
+  expect(isFollow(' follow')).toBe(true)
+  expect(isFollow('SIMPLE')).toBe(false)
+  expect(isFollow('not FOLLOW')).toBe(false)
 })

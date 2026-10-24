@@ -89,10 +89,11 @@ Fires once per turn, before the model is called.
 
 1. Subagent turns (`e.agentId` set) and turns with no typed text (continuations) are skipped.
 2. The prompt (its first 4000 characters) is sent to Haiku inside a fixed instruction ([below](#what-counts-as-simple)), with `maxTokens: 16` (`MAX_TOKENS` in `hooks/classify.ts`; at 5 the reply was cut to `SIMPL`), `effort: 'low'` and a **4 s timeout**.
-3. `isCheap()` reads the reply: only a reply that **starts with** `SIMPLE` counts. Anything else (`COMPLEX`, an empty reply, "I think SIMPLE") keeps the strong model.
-4. **Fail safe.** A timeout, an API error, or the hook throwing (its `.catch` passes the turn on untouched) all keep your model: the mod never downgrades by accident.
-5. **Cost check.** A simple prompt goes to Haiku only if that is cheaper once both prompt caches are counted ([below](#when-a-simple-prompt-stays-on-your-model)).
-6. A Haiku turn's id is remembered, the status line is updated, and the switch counter moves if the choice changed ([the switch warning](#the-switch-warning)).
+3. `isCheap()` and `isFollow()` read the reply: only a reply that **starts with** `SIMPLE` or `FOLLOW` counts. Anything else (`COMPLEX`, an empty reply, "I think SIMPLE") keeps the strong model.
+4. **Follow-ups.** `FOLLOW` means the prompt only answers the previous turn ("yes", "go on", "the second one"), so it takes that turn's model: a go-ahead for Opus's plan stays on Opus, an "ok" after a Haiku answer stays on Haiku. No switch, no cache re-written. A follow-up as the first prompt of a session runs on your model.
+5. **Fail safe.** A timeout, an API error, or the hook throwing (its `.catch` passes the turn on untouched) all keep your model: the mod never downgrades by accident.
+6. **Cost check.** A simple prompt (or a follow-up of a Haiku turn) goes to Haiku only if that is cheaper once both prompt caches are counted ([below](#when-a-simple-prompt-stays-on-your-model)).
+7. A Haiku turn's id is remembered, the status line is updated, and the switch counter moves if the choice changed ([the switch warning](#the-switch-warning)).
 
 Every prompt is classified, short ones too.
 
@@ -143,16 +144,17 @@ The instruction Haiku gets, verbatim:
 You route prompts for a coding assistant. Reply with one word.
 SIMPLE: a factual question, explaining a short snippet, a rename, a typo, a one-line or one-file trivial edit, formatting, a shell one-liner, translating text.
 COMPLEX: debugging, architecture or design, multi-file changes, refactors, new features, security, performance, anything ambiguous.
+FOLLOW: a reply that only makes sense with the previous message and asks for nothing new: yes, no, ok, go on, do it, the second one.
 When unsure, reply COMPLEX.
 ```
 
-| Goes to Haiku (`SIMPLE`) | Stays on your model (`COMPLEX`) |
-|--------------------------|----------------------------------|
-| "what does `git rebase --onto` do?" | "this test fails only in CI, find out why" |
-| "rename `userId` to `accountId` in this file" | "split this module into a service and a repository" |
-| "fix the typo in the README title" | "add OAuth login" |
-| "a one-liner to count lines in all `.ts` files" | "is this endpoint safe against SQL injection?" |
-| "translate this paragraph to English" | "yes, do it" (no context: unsure, so complex) |
+| Goes to Haiku (`SIMPLE`) | Stays on your model (`COMPLEX`) | Keeps the last turn's model (`FOLLOW`) |
+|--------------------------|----------------------------------|-----------------------------------------|
+| "what does `git rebase --onto` do?" | "this test fails only in CI, find out why" | "yes, do it" |
+| "rename `userId` to `accountId` in this file" | "split this module into a service and a repository" | "go on" |
+| "fix the typo in the README title" | "add OAuth login" | "the second one" |
+| "a one-liner to count lines in all `.ts` files" | "is this endpoint safe against SQL injection?" | "sì, procedi" |
+| "translate this paragraph to English" | "migrate the project from Jest to Vitest" | "no, use the other option" |
 
 ---
 
@@ -215,15 +217,15 @@ What the baseline cannot know:
 
 ### Offline classifier benchmark
 
-[`bench/run.ts`](bench/run.ts) sends every prompt of [`bench/prompts.json`](bench/prompts.json) (40 prompts, English and Italian, each labelled simple or complex) to Claude Haiku 5.5 with the mod's own instruction and reply parser (both imported from [`hooks/classify.ts`](hooks/classify.ts)), and reports:
+[`bench/run.ts`](bench/run.ts) sends every prompt of [`bench/prompts.json`](bench/prompts.json) (48 prompts, English and Italian, each labelled `SIMPLE`, `COMPLEX` or `FOLLOW`) to Claude Haiku 5.5 with the mod's own instruction and reply parsers (all imported from [`hooks/classify.ts`](hooks/classify.ts)), and reports:
 
-- **routed right**: the share labelled as the mod would want;
-- **sent to Haiku wrong**: complex prompts Haiku took on itself, the errors that cost quality;
-- **kept strong wrong**: simple prompts kept on the strong model, which only cost missed savings;
+- **routed right**: the share answered with its label;
+- **may reach Haiku**: the errors that cost quality, a complex prompt answered `SIMPLE` or `FOLLOW` (a follow-up of a Haiku turn), or a follow-up answered `SIMPLE` (a go-ahead for Opus's plan sent to Haiku);
+- **may stay strong**: the rest, which only cost missed savings or an extra switch;
 - **latency p50 / p95** of the classification, which every turn waits for;
 - **classifier cost** per prompt.
 
-Each misrouted prompt is printed with Haiku's reply. Run it with an API key (the 40 calls cost well under a cent):
+Each misrouted prompt is printed with Haiku's reply. Run it with an API key (the 48 calls cost well under a cent):
 
 ```
 cd bench
@@ -231,7 +233,7 @@ npm install
 ANTHROPIC_API_KEY=sk-ant-... npm start
 ```
 
-Last run (2026-10-24, Claude Haiku 5.5):
+Last run (2026-10-24, Claude Haiku 5.5), before `FOLLOW` and its 10 follow-up prompts were added; not yet re-run:
 
 ```
 prompts             40
@@ -275,7 +277,7 @@ model-router/
 
 Exported so they can be tested on their own:
 
-- `isCheap(reply: string): boolean` (`classify.ts`): the reply parser
+- `isCheap(reply: string): boolean`, `isFollow(reply: string): boolean` (`classify.ts`): the reply parsers
 - `cost(usage: ModelUsage, model: string, warm?: boolean): number` (`register.tsx`): the dollars a call cost; `warm` prices cache writes as reads
 - `cheaper(moment: Moment, strong: string): boolean` (`register.tsx`): whether a simple turn costs less on Haiku, both caches counted
 
@@ -298,11 +300,13 @@ hooks/register.test.ts:
 (pass) the band shows after three switches and Dismiss hides it
 (pass) a Haiku turn shows what it saved against the session model
 (pass) a simple prompt stays on Opus when its cache would expire before the next turn
+(pass) a follow-up stays on the model of the turn it answers
+(pass) a follow-up as the first prompt runs on the session model
 (pass) weighs both caches before sending a simple turn to Haiku
 (pass) prices tokens per model, cache writes as reads when warm
 (pass) parses the router reply, defaulting to the strong model
 
- 6 pass
+ 8 pass
  0 fail
 ```
 
@@ -328,14 +332,17 @@ hooks/register.test.ts:
 - after the 3rd, the band's text "Model switched 3 times" is drawn;
 - pressing **Dismiss** removes it.
 
-**`parses the router reply, defaulting to the strong model`** checks `isCheap()`:
+**`a follow-up stays on the model of the turn it answers`** runs four turns, Haiku answering `SIMPLE`, `FOLLOW`, `COMPLEX`, `FOLLOW`: the steps run on Haiku, Haiku, Opus, Opus. **`a follow-up as the first prompt runs on the session model`** checks a `FOLLOW` with no turn before it runs on Opus.
+
+**`parses the router reply, defaulting to the strong model`** checks `isCheap()` and `isFollow()`:
 
 | Reply | Result |
 |-------|--------|
 | `SIMPLE` | Haiku |
 | ` simple.` | Haiku |
+| `FOLLOW`, ` follow` | the last turn's model |
 | `COMPLEX` | strong model |
-| `I think SIMPLE` | strong model |
+| `I think SIMPLE`, `not FOLLOW` | strong model |
 | *(empty)* | strong model |
 
 Not covered: the **New session** button, and `turn.step` actually swapping the model on a live session (check it by hand with the status line).
@@ -381,7 +388,7 @@ Everything lives in `hooks/register.tsx`, except the classifier's prompt and tok
 
 ## Limits and known trade-offs
 
-- **The classifier sees only the prompt, not the conversation.** A bare follow-up ("yes", "go on", "fix it") has no context, so it usually goes to the strong model, which can mean an extra switch.
+- **The classifier sees only the prompt, not the conversation.** A bare follow-up ("yes", "go on") keeps the last turn's model, which is right when the go-ahead is for what that model proposed. A follow-up that also asks for new work ("yes, and add tests for it") is judged on its own words.
 - **Every turn costs one Haiku call** (about $0.00002: the prompt plus a one-word reply) and up to 4 s of waiting before the turn starts.
 - **Switching rebuilds the prompt cache.** The [cost check](#when-a-simple-prompt-stays-on-your-model) avoids the switches that cost more than they save, and [the warning](#the-switch-warning) flags a session that switches a lot anyway.
 - **The cost check predicts.** It assumes the next turn may need your model and comes after the usual gap; a turn that comes much later or never needs Opus again makes it keep Opus when Haiku would have been fine.

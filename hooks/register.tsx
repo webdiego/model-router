@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { ModelUsage, Register } from 'claude-code'
-import { ASK, MAX_TOKENS, isCheap } from './classify'
+import { ASK, MAX_TOKENS, isCheap, isFollow } from './classify'
 
 const CHEAP = 'haiku'
 // Each model has its own prompt cache, so every switch re-writes the context into the other cache.
@@ -76,8 +76,8 @@ export const register: Register = on => {
       const strong = await $.session.model()
       const r = await $.model.complete({ model: CHEAP, prompt: `${ASK}${e.text.slice(0, 4000)}\n>>>`, maxTokens: MAX_TOKENS, effort: 'low', timeoutMs: 4000 })
       if (r.isAnswered) spent += cost(r.usage, CHEAP)
-      // Any failure keeps the session's model: never downgrade by accident.
-      const simple = r.isAnswered && isCheap(r.text)
+      // Any failure keeps the session's model: never downgrade by accident. A follow-up keeps the model it answers.
+      const simple = r.isAnswered && (isFollow(r.text) ? lastWasCheap : isCheap(r.text))
       const cheap = simple && cheaper({ context, output: avgOutput, gapMs: avgGapMs, strongAt, cheapAt, now }, strong)
       if (cheap !== lastWasCheap) {
         switchedTurns.add(e.turnId)
