@@ -91,9 +91,29 @@ Fires once per turn, before the model is called.
 2. The prompt (its first 4000 characters) is sent to Haiku inside a fixed instruction ([below](#what-counts-as-simple)), with `maxTokens: 16` (`MAX_TOKENS` in `hooks/classify.ts`; at 5 the reply was cut to `SIMPL`), `effort: 'low'` and a **4 s timeout**.
 3. `isCheap()` reads the reply: only a reply that **starts with** `SIMPLE` counts. Anything else (`COMPLEX`, an empty reply, "I think SIMPLE") keeps the strong model.
 4. **Fail safe.** A timeout, an API error, or the hook throwing (its `.catch` passes the turn on untouched) all keep your model: the mod never downgrades by accident.
-5. A simple turn's id is remembered, the status line is updated, and the switch counter moves if the choice changed ([the switch warning](#the-switch-warning)).
+5. **Cost check.** A simple prompt goes to Haiku only if that is cheaper once both prompt caches are counted ([below](#when-a-simple-prompt-stays-on-your-model)).
+6. A Haiku turn's id is remembered, the status line is updated, and the switch counter moves if the choice changed ([the switch warning](#the-switch-warning)).
 
 Every prompt is classified, short ones too.
+
+### When a simple prompt stays on your model
+
+Haiku is 40 times cheaper than Opus per token, but each model has its own prompt cache, and the context (Claude Code's system prompt, the conversation, the files read) can be tens of thousands of tokens. Re-writing 50,000 tokens into Opus's cache costs $0.25, more than a dozen Haiku turns save. So `cheaper()` prices the turn both ways from what the session has measured:
+
+| | On your model | On Haiku |
+|---|---|---|
+| Context | read from its cache if used in the last 5 minutes, else re-written | read from Haiku's cache if warm, else written |
+| Output | the average output of past turns, at its price | the same, at Haiku's price |
+| Penalty | | if your model's cache is warm now but will have expired by the next turn (the average gap between turns), re-writing it then |
+
+The cheaper side wins. In practice:
+
+- **a quick question in the middle of Opus work** goes to Haiku: Opus's cache is still warm when you come back;
+- **a run of simple turns** stays on Haiku until Opus's cache is about to expire on a large context; then one simple turn runs on Opus to keep its cache, and the status line says `🧠 opus (keeps its cache)`;
+- **after a break of more than 5 minutes** Opus's cache is cold anyway, so Haiku has nothing to lose;
+- **on a small context** the re-write is cheap, so Haiku wins even near the expiry.
+
+The context size is the last request's tokens (input, cache reads and writes, output); output and gap are moving averages, starting at 500 tokens and one minute. Claude Code caches for 5 minutes or 1 hour and does not tell a mod which; the mod assumes 5 (`CACHE_TTL_MS`). If your cache lasts an hour, that only makes it keep Opus a little more often than needed: it can miss savings, never cost more.
 
 ### 2. `turn.step`: running the turn on Haiku
 
@@ -103,11 +123,11 @@ The hook also reads each step's `stop` chunk, which carries the tokens the API r
 
 ### 3. `turn.complete`: cleanup
 
-The turn's id is forgotten.
+The turn's id is forgotten, and its output tokens update the average the cost check uses.
 
 ### 4. `session.end`: reset
 
-`/clear` ends the session without reloading the mod, so the switch counter, the last choice, the savings and the warning are reset here.
+`/clear` ends the session without reloading the mod, so the switch counter, the last choice, the savings, the cache timings and the warning are reset here.
 
 ### 5. `ui.render` on `AbovePrompt`: the switch warning
 
@@ -142,6 +162,7 @@ When unsure, reply COMPLEX.
 |-------|---------|
 | `⚡ haiku` | this turn runs on Haiku |
 | `🧠 <model>` | this turn runs on the session's model, as `/model` set it (e.g. `🧠 opus`) |
+| `🧠 <model> (keeps its cache)` | the prompt was simple, but running it on Haiku would have let your model's cache expire ([why](#when-a-simple-prompt-stays-on-your-model)) |
 | `· saved $0.42 (61%)` | what the router saved in this session so far ([how it is measured](#live-savings-in-the-status-line)) |
 
 ---
@@ -256,6 +277,7 @@ Exported so they can be tested on their own:
 
 - `isCheap(reply: string): boolean` (`classify.ts`): the reply parser
 - `cost(usage: ModelUsage, model: string, warm?: boolean): number` (`register.tsx`): the dollars a call cost; `warm` prices cache writes as reads
+- `cheaper(moment: Moment, strong: string): boolean` (`register.tsx`): whether a simple turn costs less on Haiku, both caches counted
 
 ---
 
@@ -267,7 +289,7 @@ Run them with:
 claude plugin test .
 ```
 
-The runner executes every `*.test.ts` / `*.test.tsx` in an environment like the one the mod's hooks run in, importing its kit from `claude-code/testing`. Nothing sits beneath the mod in a test: small hooks registered with `on(...)` stand in for the engine (answering `model.complete` with scripted replies, `session.model` with `opus`, and drawing nothing for `ui.render`).
+The runner executes every `*.test.ts` / `*.test.tsx` in an environment like the one the mod's hooks run in, importing its kit from `claude-code/testing`. Nothing sits beneath the mod in a test: small hooks registered with `on(...)` stand in for the engine (answering `model.complete` with scripted replies, `session.model` with `claude-opus-5-5`, each `turn.step` with the tokens the test chooses, and drawing nothing for `ui.render`), and `mock.clock` holds the time still until the test moves it.
 
 Current result:
 
@@ -275,12 +297,26 @@ Current result:
 hooks/register.test.ts:
 (pass) the band shows after three switches and Dismiss hides it
 (pass) a Haiku turn shows what it saved against the session model
+(pass) a simple prompt stays on Opus when its cache would expire before the next turn
+(pass) weighs both caches before sending a simple turn to Haiku
 (pass) prices tokens per model, cache writes as reads when warm
 (pass) parses the router reply, defaulting to the strong model
 
- 4 pass
+ 6 pass
  0 fail
 ```
+
+**`a simple prompt stays on Opus when its cache would expire before the next turn`** runs a complex turn on Opus over a 50,000-token context, moves the clock 4.5 minutes, then sends a simple prompt. Both steps reach the engine on `claude-opus-5-5`, and the status line reads `🧠 claude-opus-5-5 (keeps its cache)`.
+
+**`weighs both caches before sending a simple turn to Haiku`** checks `cheaper()` at fixed moments (500 output tokens, one minute between turns):
+
+| Context | Opus cache last used | Haiku cache last used | Goes to |
+|---------|----------------------|-----------------------|---------|
+| 50,000 | 1 min ago | never | Haiku |
+| 50,000 | 4.5 min ago | 30 s ago | Opus |
+| 1,000 | 4.5 min ago | never | Haiku |
+| 50,000 | 10 min ago | never | Haiku |
+| any, session model not priced | | | Haiku |
 
 **`a Haiku turn shows what it saved against the session model`** runs a simple turn whose step reports 10,000 cache-write tokens and 1,000 output tokens. It checks the step reached the engine with `model: 'haiku'` and the status line reads `⚡ haiku · saved $0.02 (92%)`: $0.00175 on Haiku against $0.022 on a warm Opus.
 
@@ -332,12 +368,13 @@ To see a switch by hand: send a simple prompt, then a complex one, then a simple
 
 ## Customizing
 
-Everything lives in `hooks/register.tsx`.
+Everything lives in `hooks/register.tsx`, except the classifier's prompt and token limit, in `hooks/classify.ts`.
 
 - **Change the cheap model:** change `CHEAP` (`'haiku'`).
 - **Change what counts as simple:** edit the `SIMPLE:` / `COMPLEX:` lines of `ASK`. Keep "When unsure, reply COMPLEX" so mistakes cost money, not quality.
 - **Warn sooner or later:** change `SWITCH_WARN_AT` (`3`).
 - **Update prices:** edit `PRICES` (input, output, cache read per million tokens, matched by model family).
+- **Your cache lasts an hour:** set `CACHE_TTL_MS` to `60 * 60_000`, so simple prompts stop staying on your model to keep a cache that was not about to expire.
 - **Give the classifier more time:** change `timeoutMs` (`4000`) in the `turn.start` hook.
 
 ---
@@ -346,7 +383,9 @@ Everything lives in `hooks/register.tsx`.
 
 - **The classifier sees only the prompt, not the conversation.** A bare follow-up ("yes", "go on", "fix it") has no context, so it usually goes to the strong model, which can mean an extra switch.
 - **Every turn costs one Haiku call** (about $0.00002: the prompt plus a one-word reply) and up to 4 s of waiting before the turn starts.
-- **Switching rebuilds the prompt cache.** In a long session, frequent switches can cost more than they save; that is what [the warning](#the-switch-warning) is for.
+- **Switching rebuilds the prompt cache.** The [cost check](#when-a-simple-prompt-stays-on-your-model) avoids the switches that cost more than they save, and [the warning](#the-switch-warning) flags a session that switches a lot anyway.
+- **The cost check predicts.** It assumes the next turn may need your model and comes after the usual gap; a turn that comes much later or never needs Opus again makes it keep Opus when Haiku would have been fine.
+- **The cache lifetime is assumed**, at 5 minutes: Claude Code does not tell a mod whether it caches for 5 minutes or an hour.
 - **It misjudges sometimes.** A hard task worded simply may run on Haiku; resend it reworded, or switch the mod off for that session.
 - **Only the main loop is routed.** Subagents use whatever model they were given.
 - **The switch count is per session**, held in memory: it starts over on `/clear` and on restart.
