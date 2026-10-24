@@ -2,7 +2,7 @@
 // Run from bench/: npm install && npm start (Node 22.18+ runs the .ts as is). Needs ANTHROPIC_API_KEY.
 import Anthropic from '@anthropic-ai/sdk'
 import { readFileSync } from 'node:fs'
-import { ASK, isCheap } from '../hooks/classify.ts'
+import { ASK, MAX_TOKENS, isCheap } from '../hooks/classify.ts'
 
 type Case = { prompt: string; simple: boolean }
 
@@ -24,8 +24,8 @@ for (const c of cases) {
   const start = Date.now()
   const r = await client.messages.create({
     model: MODEL,
-    max_tokens: 5,
-    // The mod asks for one word; thinking would spend the 5 tokens before it.
+    max_tokens: MAX_TOKENS,
+    // The mod asks for one word; thinking would spend the tokens before it.
     thinking: { type: 'disabled' },
     output_config: { effort: 'low' },
     messages: [{ role: 'user', content: `${ASK}${c.prompt.slice(0, 4000)}\n>>>` }],

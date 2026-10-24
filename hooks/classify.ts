@@ -8,4 +8,7 @@ Prompt:
 <<<
 `
 
-export const isCheap = (reply: string) => /^\s*SIMPLE\b/i.test(reply)
+// At 5 tokens Haiku's reply came back cut to "SIMPL", so every simple prompt stayed on the strong model.
+export const MAX_TOKENS = 16
+
+export const isCheap =(reply: string) => /^\s*SIMPLE\b/i.test(reply)

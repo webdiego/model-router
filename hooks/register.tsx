@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { ModelUsage, Register } from 'claude-code'
-import { ASK, isCheap } from './classify'
+import { ASK, MAX_TOKENS, isCheap } from './classify'
 
 const CHEAP = 'haiku'
 // Each model has its own prompt cache, so every switch re-writes the context into the other cache.
@@ -40,7 +40,7 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined && e.text.trim() !== '') {
-      const r = await $.model.complete({ model: CHEAP, prompt: `${ASK}${e.text.slice(0, 4000)}\n>>>`, maxTokens: 5, effort: 'low', timeoutMs: 4000 })
+      const r = await $.model.complete({ model: CHEAP, prompt: `${ASK}${e.text.slice(0, 4000)}\n>>>`, maxTokens: MAX_TOKENS, effort: 'low', timeoutMs: 4000 })
       if (r.isAnswered) spent += cost(r.usage, CHEAP)
       // Any failure keeps the session's model: never downgrade by accident.
       const cheap = r.isAnswered && isCheap(r.text)

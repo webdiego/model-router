@@ -45,7 +45,7 @@ router:       COMPLEX  →  status line: 🧠 opus
 
 Most sessions mix hard work (debugging, refactors, design) with small questions (what does this flag do, rename this, fix this typo). Running the small ones on Opus costs far more than they need. Switching by hand with `/model` every few turns is tedious, so nobody does it.
 
-This mod makes the choice for you, per turn, with a classification that costs about 5 output tokens on Haiku. It only ever routes **down**: it never picks a model stronger than the one you chose.
+This mod makes the choice for you, per turn, with a one-word classification on Haiku that costs about $0.00002. It only ever routes **down**: it never picks a model stronger than the one you chose.
 
 ---
 
@@ -88,7 +88,7 @@ The mod is a single hooks module, [`hooks/register.tsx`](hooks/register.tsx), wi
 Fires once per turn, before the model is called.
 
 1. Subagent turns (`e.agentId` set) and turns with no typed text (continuations) are skipped.
-2. The prompt (its first 4000 characters) is sent to Haiku inside a fixed instruction ([below](#what-counts-as-simple)), with `maxTokens: 5`, `effort: 'low'` and a **4 s timeout**.
+2. The prompt (its first 4000 characters) is sent to Haiku inside a fixed instruction ([below](#what-counts-as-simple)), with `maxTokens: 16` (`MAX_TOKENS` in `hooks/classify.ts`; at 5 the reply was cut to `SIMPL`), `effort: 'low'` and a **4 s timeout**.
 3. `isCheap()` reads the reply: only a reply that **starts with** `SIMPLE` counts. Anything else (`COMPLEX`, an empty reply, "I think SIMPLE") keeps the strong model.
 4. **Fail safe.** A timeout, an API error, or the hook throwing (its `.catch` passes the turn on untouched) all keep your model: the mod never downgrades by accident.
 5. A simple turn's id is remembered, the status line is updated, and the switch counter moves if the choice changed ([the switch warning](#the-switch-warning)).
@@ -209,6 +209,19 @@ cd bench
 npm install
 ANTHROPIC_API_KEY=sk-ant-... npm start
 ```
+
+Last run (2026-10-24, Claude Haiku 5.5):
+
+```
+prompts             40
+routed right        40 (100%)
+sent to Haiku wrong 0 (0%)   quality risk: a hard task answered by Haiku
+kept strong wrong   0 (0%)   missed savings only
+latency p50 / p95   843 ms / 1553 ms
+classifier cost     $0.000022 per prompt, $0.0009 total
+```
+
+The first run, at `max_tokens: 5`, routed only 50% right: every simple prompt came back as `SIMPL`, cut by the limit, so nothing ever went to Haiku. That is why the limit is now 16.
 
 It calls the API directly with thinking off, while the mod goes through Claude Code's own `model.complete`, so latency in a session can differ. Add your own prompts to `prompts.json` to test the cases you care about.
 
@@ -332,7 +345,7 @@ Everything lives in `hooks/register.tsx`.
 ## Limits and known trade-offs
 
 - **The classifier sees only the prompt, not the conversation.** A bare follow-up ("yes", "go on", "fix it") has no context, so it usually goes to the strong model, which can mean an extra switch.
-- **Every turn costs one Haiku call** (the prompt plus about 5 output tokens) and up to 4 s of waiting before the turn starts.
+- **Every turn costs one Haiku call** (about $0.00002: the prompt plus a one-word reply) and up to 4 s of waiting before the turn starts.
 - **Switching rebuilds the prompt cache.** In a long session, frequent switches can cost more than they save; that is what [the warning](#the-switch-warning) is for.
 - **It misjudges sometimes.** A hard task worded simply may run on Haiku; resend it reworded, or switch the mod off for that session.
 - **Only the main loop is routed.** Subagents use whatever model they were given.

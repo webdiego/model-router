@@ -21,7 +21,7 @@
 
   <text x="380" y="160" fill="#c0caf5" font-size="64" font-weight="bold">model-router</text>
   <text x="382" y="204" fill="#a9b1d6" font-size="22">Simple prompts on Haiku, hard ones on your model.</text>
-  <text x="382" y="236" fill="#565f89" font-size="18">A Claude Code mod · one 5-token check per turn · routes down, never up</text>
+  <text x="382" y="236" fill="#565f89" font-size="18">A Claude Code mod · a one-word check per turn · routes down, never up</text>
 
   <text x="382" y="300" fill="#a9b1d6" font-size="20">what does ls -la do?</text>
   <text x="760" y="300" fill="#565f89" font-size="20">→</text>
