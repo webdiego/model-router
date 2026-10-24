@@ -1,0 +1,11 @@
+{
+  "name": "model-router-bench",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node run.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0"
+  }
+}

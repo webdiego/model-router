@@ -30,6 +30,7 @@ router:       COMPLEX  →  status line: 🧠 opus
 - [What counts as simple](#what-counts-as-simple)
 - [The status line](#the-status-line)
 - [The switch warning](#the-switch-warning)
+- [Benchmarks](#benchmarks)
 - [Project structure](#project-structure)
 - [Tests](#tests)
 - [Development](#development)
@@ -98,13 +99,15 @@ Every prompt is classified, short ones too.
 
 Each step of a remembered turn (every model call in it, tool loops included) is passed on with `model: 'haiku'`. Other turns and subagents are passed on unchanged, so they use the session's model.
 
+The hook also reads each step's `stop` chunk, which carries the tokens the API reported, to [measure the savings](#live-savings-in-the-status-line).
+
 ### 3. `turn.complete`: cleanup
 
 The turn's id is forgotten.
 
 ### 4. `session.end`: reset
 
-`/clear` ends the session without reloading the mod, so the switch counter, the last choice and the warning are reset here.
+`/clear` ends the session without reloading the mod, so the switch counter, the last choice, the savings and the warning are reset here.
 
 ### 5. `ui.render` on `AbovePrompt`: the switch warning
 
@@ -139,6 +142,7 @@ When unsure, reply COMPLEX.
 |-------|---------|
 | `⚡ haiku` | this turn runs on Haiku |
 | `🧠 <model>` | this turn runs on the session's model, as `/model` set it (e.g. `🧠 opus`) |
+| `· saved $0.42 (61%)` | what the router saved in this session so far ([how it is measured](#live-savings-in-the-status-line)) |
 
 ---
 
@@ -159,6 +163,57 @@ The band's flag lives in plugin state (`showSwitchWarning`, typed in [`types/ind
 
 ---
 
+## Benchmarks
+
+Two measurements answer two different questions: **how much does it actually save** (live, on your real sessions) and **how well does Haiku route** (offline, on a fixed set of prompts).
+
+### Live savings in the status line
+
+Every model call of the session is priced twice, from the tokens the API reported in the step's `stop` chunk:
+
+- **spent**: the tokens at the price of the model that answered, plus every classification call on Haiku;
+- **baseline**: the same tokens at the price of the session's model, as if the router were off.
+
+The status line shows `baseline − spent` and the share of the baseline it is. The switch cost is in the measure: after a switch, the model that takes over writes the whole context into its cache, and `spent` pays for those writes; in the baseline that first step is priced as cache reads, since with no switch the cache would have stayed warm.
+
+Prices, in $ per million tokens (`PRICES` in `hooks/register.tsx`; a cache write is 1.25× input):
+
+| Model family | Input | Output | Cache read |
+|--------------|-------|--------|------------|
+| Opus | 4.00 | 20.00 | 0.20 |
+| Sonnet | 2.00 | 10.00 | 0.20 |
+| Haiku | 0.10 | 0.50 | 0.01 |
+| Fable / Mythos | 10.00 | 50.00 | 0.25 |
+
+What the baseline cannot know:
+
+- **The strong model would have written a different answer.** The baseline prices Haiku's own token counts (its output length, its tool loop) at the strong model's rates.
+- **The first step of every switched turn is priced as warm** in the baseline, including the new message's own tokens, which would have been written anyway. This makes the baseline slightly low, so the savings shown lean conservative.
+- **Prices are matched by family**, at 5.5 rates: an older Opus (4.x at $5 / $25) is priced as Opus 5.5. Haiku above 100K-token prompts ($0.50 / $2.50) is priced at the base rate. Haiku's cache read price is taken as 0.1× input.
+- **A model not in the table costs 0**, so a session on one shows no savings.
+
+### Offline classifier benchmark
+
+[`bench/run.ts`](bench/run.ts) sends every prompt of [`bench/prompts.json`](bench/prompts.json) (40 prompts, English and Italian, each labelled simple or complex) to Claude Haiku 5.5 with the mod's own instruction and reply parser (both imported from [`hooks/classify.ts`](hooks/classify.ts)), and reports:
+
+- **routed right**: the share labelled as the mod would want;
+- **sent to Haiku wrong**: complex prompts Haiku took on itself, the errors that cost quality;
+- **kept strong wrong**: simple prompts kept on the strong model, which only cost missed savings;
+- **latency p50 / p95** of the classification, which every turn waits for;
+- **classifier cost** per prompt.
+
+Each misrouted prompt is printed with Haiku's reply. Run it with an API key (the 40 calls cost well under a cent):
+
+```
+cd bench
+npm install
+ANTHROPIC_API_KEY=sk-ant-... npm start
+```
+
+It calls the API directly with thinking off, while the mod goes through Claude Code's own `model.complete`, so latency in a session can differ. Add your own prompts to `prompts.json` to test the cases you care about.
+
+---
+
 ## Project structure
 
 ```
@@ -167,10 +222,15 @@ model-router/
 │   ├── plugin.json          # mod manifest: name, version, description, icon
 │   ├── icon.png             # 1024×1024 plugin icon
 │   └── marketplace.json     # makes this repo installable with one line
+├── bench/
+│   ├── run.ts               # offline classifier benchmark
+│   ├── prompts.json         # labelled prompts it routes
+│   └── package.json         # the Anthropic SDK, for the benchmark only
 ├── docs/                    # logo, banner and README illustrations (SVG)
 ├── hooks/
 │   ├── hooks.json           # points the engine at register.tsx
-│   ├── register.tsx         # the mod: classifier prompt, isCheap(), hooks, the band
+│   ├── classify.ts          # the classifier prompt (ASK) and isCheap(), shared with the benchmark
+│   ├── register.tsx         # the mod: prices, cost(), hooks, the band
 │   └── register.test.ts     # unit and integration tests
 ├── types/
 │   └── index.d.ts           # state contract: the band's showSwitchWarning flag
@@ -179,7 +239,10 @@ model-router/
 └── README.md
 ```
 
-`register.tsx` exports `isCheap(reply: string): boolean`, the reply parser, so it can be tested on its own.
+Exported so they can be tested on their own:
+
+- `isCheap(reply: string): boolean` (`classify.ts`): the reply parser
+- `cost(usage: ModelUsage, model: string, warm?: boolean): number` (`register.tsx`): the dollars a call cost; `warm` prices cache writes as reads
 
 ---
 
@@ -198,11 +261,17 @@ Current result:
 ```
 hooks/register.test.ts:
 (pass) the band shows after three switches and Dismiss hides it
+(pass) a Haiku turn shows what it saved against the session model
+(pass) prices tokens per model, cache writes as reads when warm
 (pass) parses the router reply, defaulting to the strong model
 
- 2 pass
+ 4 pass
  0 fail
 ```
+
+**`a Haiku turn shows what it saved against the session model`** runs a simple turn whose step reports 10,000 cache-write tokens and 1,000 output tokens. It checks the step reached the engine with `model: 'haiku'` and the status line reads `⚡ haiku · saved $0.02 (92%)`: $0.00175 on Haiku against $0.022 on a warm Opus.
+
+**`prices tokens per model, cache writes as reads when warm`** checks `cost()`: a million Opus input tokens cost $4, a million Haiku output tokens $0.50, a million Opus cache writes $5 (or $0.20 when warm), and an unknown model $0.
 
 **`the band shows after three switches and Dismiss hides it`** runs three turns through the real hook chain with Haiku answering `SIMPLE`, `COMPLEX`, `SIMPLE`, and mounts the `AbovePrompt` band on the terminal surface:
 
@@ -255,6 +324,7 @@ Everything lives in `hooks/register.tsx`.
 - **Change the cheap model:** change `CHEAP` (`'haiku'`).
 - **Change what counts as simple:** edit the `SIMPLE:` / `COMPLEX:` lines of `ASK`. Keep "When unsure, reply COMPLEX" so mistakes cost money, not quality.
 - **Warn sooner or later:** change `SWITCH_WARN_AT` (`3`).
+- **Update prices:** edit `PRICES` (input, output, cache read per million tokens, matched by model family).
 - **Give the classifier more time:** change `timeoutMs` (`4000`) in the `turn.start` hook.
 
 ---
