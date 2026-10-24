@@ -1,0 +1,291 @@
+<p align="center">
+  <img src="docs/banner.svg" alt="model-router: simple prompts on Haiku, hard ones on your model" width="100%">
+</p>
+
+# model-router
+
+> A Claude Code mod that runs simple prompts on **Haiku** and keeps the model you picked with `/model` for the hard ones, **to save cost**.
+
+Before each turn, Haiku reads your prompt and answers one word: `SIMPLE` (it can handle it) or `COMPLEX` (it needs the stronger model, e.g. Opus). A simple turn runs entirely on Haiku; a complex one runs on your model, unchanged. The status line shows which one is answering.
+
+```
+you type:     explain what ls -la does in the terminal, briefly
+router:       SIMPLE   →  status line: ⚡ haiku
+
+you type:     debug why the session token expires after the refresh, it touches auth and the API client
+router:       COMPLEX  →  status line: 🧠 opus
+```
+
+![A simple turn and a complex one in the terminal, with the switch warning and the status line](docs/terminal.svg)
+
+> The images in this README are illustrations of the mod's output, drawn with the exact text it uses; they are not screen captures.
+
+---
+
+## Table of contents
+
+- [Why](#why)
+- [Install](#install)
+- [How it works](#how-it-works)
+- [What counts as simple](#what-counts-as-simple)
+- [The status line](#the-status-line)
+- [The switch warning](#the-switch-warning)
+- [Project structure](#project-structure)
+- [Tests](#tests)
+- [Development](#development)
+- [Customizing](#customizing)
+- [Limits and known trade-offs](#limits-and-known-trade-offs)
+- [FAQ](#faq)
+- [License](#license)
+
+---
+
+## Why
+
+Most sessions mix hard work (debugging, refactors, design) with small questions (what does this flag do, rename this, fix this typo). Running the small ones on Opus costs far more than they need. Switching by hand with `/model` every few turns is tedious, so nobody does it.
+
+This mod makes the choice for you, per turn, with a classification that costs about 5 output tokens on Haiku. It only ever routes **down**: it never picks a model stronger than the one you chose.
+
+---
+
+## Install
+
+At the prompt of a Claude Code terminal session:
+
+```
+/plugin install model-router --marketplace webdiego/model-router
+```
+
+What you will see:
+
+1. `Add marketplace?` naming `github:webdiego/model-router`: answer `y`.
+2. The plugin's details and a choice of scope: pick **user** (applies to every session) with Enter.
+3. `Installed model-router. Plugin is now active.` The mod runs from the next prompt; there are no options to set.
+
+From a shell:
+
+```
+claude plugin install model-router --marketplace webdiego/model-router
+```
+
+In the desktop app, where `/plugin` does not run: click **+** next to the prompt box, then **Plugins**, **Add marketplace** with `webdiego/model-router`, then **Add plugin**.
+
+To remove it, from a shell:
+
+```
+claude plugin uninstall model-router
+```
+
+---
+
+## How it works
+
+The mod is a single hooks module, [`hooks/register.tsx`](hooks/register.tsx), with five hooks.
+
+### 1. `turn.start`: classification
+
+Fires once per turn, before the model is called.
+
+1. Subagent turns (`e.agentId` set) and turns with no typed text (continuations) are skipped.
+2. The prompt (its first 4000 characters) is sent to Haiku inside a fixed instruction ([below](#what-counts-as-simple)), with `maxTokens: 5`, `effort: 'low'` and a **4 s timeout**.
+3. `isCheap()` reads the reply: only a reply that **starts with** `SIMPLE` counts. Anything else (`COMPLEX`, an empty reply, "I think SIMPLE") keeps the strong model.
+4. **Fail safe.** A timeout, an API error, or the hook throwing (its `.catch` passes the turn on untouched) all keep your model: the mod never downgrades by accident.
+5. A simple turn's id is remembered, the status line is updated, and the switch counter moves if the choice changed ([the switch warning](#the-switch-warning)).
+
+Every prompt is classified, short ones too.
+
+### 2. `turn.step`: running the turn on Haiku
+
+Each step of a remembered turn (every model call in it, tool loops included) is passed on with `model: 'haiku'`. Other turns and subagents are passed on unchanged, so they use the session's model.
+
+### 3. `turn.complete`: cleanup
+
+The turn's id is forgotten.
+
+### 4. `session.end`: reset
+
+`/clear` ends the session without reloading the mod, so the switch counter, the last choice and the warning are reset here.
+
+### 5. `ui.render` on `AbovePrompt`: the switch warning
+
+Draws [the band](#the-switch-warning) above the prompt while the warning flag is on, unless a survey is showing there.
+
+---
+
+## What counts as simple
+
+The instruction Haiku gets, verbatim:
+
+```
+You route prompts for a coding assistant. Reply with one word.
+SIMPLE: a factual question, explaining a short snippet, a rename, a typo, a one-line or one-file trivial edit, formatting, a shell one-liner, translating text.
+COMPLEX: debugging, architecture or design, multi-file changes, refactors, new features, security, performance, anything ambiguous.
+When unsure, reply COMPLEX.
+```
+
+| Goes to Haiku (`SIMPLE`) | Stays on your model (`COMPLEX`) |
+|--------------------------|----------------------------------|
+| "what does `git rebase --onto` do?" | "this test fails only in CI, find out why" |
+| "rename `userId` to `accountId` in this file" | "split this module into a service and a repository" |
+| "fix the typo in the README title" | "add OAuth login" |
+| "a one-liner to count lines in all `.ts` files" | "is this endpoint safe against SQL injection?" |
+| "translate this paragraph to English" | "yes, do it" (no context: unsure, so complex) |
+
+---
+
+## The status line
+
+| Shown | Meaning |
+|-------|---------|
+| `⚡ haiku` | this turn runs on Haiku |
+| `🧠 <model>` | this turn runs on the session's model, as `/model` set it (e.g. `🧠 opus`) |
+
+---
+
+## The switch warning
+
+Each model keeps its own prompt cache. Every time the router switches model, the whole conversation is written into the other model's cache again, which costs tokens and can eat the savings in a long session.
+
+After **3 switches** in a session, a yellow band appears above the prompt:
+
+```
+Model switched 3 times: each switch rebuilds the prompt cache.  [New session]  [Dismiss]
+```
+
+- **New session** runs `/clear`: a fresh session starts with an empty cache and the counter at zero.
+- **Dismiss** hides the band; it does not come back in this session.
+
+The band's flag lives in plugin state (`showSwitchWarning`, typed in [`types/index.d.ts`](types/index.d.ts)).
+
+---
+
+## Project structure
+
+```
+model-router/
+├── .claude-plugin/
+│   ├── plugin.json          # mod manifest: name, version, description, icon
+│   ├── icon.png             # 1024×1024 plugin icon
+│   └── marketplace.json     # makes this repo installable with one line
+├── docs/                    # logo, banner and README illustrations (SVG)
+├── hooks/
+│   ├── hooks.json           # points the engine at register.tsx
+│   ├── register.tsx         # the mod: classifier prompt, isCheap(), hooks, the band
+│   └── register.test.ts     # unit and integration tests
+├── types/
+│   └── index.d.ts           # state contract: the band's showSwitchWarning flag
+├── tsconfig.json            # extends the types the engine writes on load
+├── LICENSE
+└── README.md
+```
+
+`register.tsx` exports `isCheap(reply: string): boolean`, the reply parser, so it can be tested on its own.
+
+---
+
+## Tests
+
+Run them with:
+
+```
+claude plugin test .
+```
+
+The runner executes every `*.test.ts` / `*.test.tsx` in an environment like the one the mod's hooks run in, importing its kit from `claude-code/testing`. Nothing sits beneath the mod in a test: small hooks registered with `on(...)` stand in for the engine (answering `model.complete` with scripted replies, `session.model` with `opus`, and drawing nothing for `ui.render`).
+
+Current result:
+
+```
+hooks/register.test.ts:
+(pass) the band shows after three switches and Dismiss hides it
+(pass) parses the router reply, defaulting to the strong model
+
+ 2 pass
+ 0 fail
+```
+
+**`the band shows after three switches and Dismiss hides it`** runs three turns through the real hook chain with Haiku answering `SIMPLE`, `COMPLEX`, `SIMPLE`, and mounts the `AbovePrompt` band on the terminal surface:
+
+- after 2 switches, no band;
+- after the 3rd, the band's text "Model switched 3 times" is drawn;
+- pressing **Dismiss** removes it.
+
+**`parses the router reply, defaulting to the strong model`** checks `isCheap()`:
+
+| Reply | Result |
+|-------|--------|
+| `SIMPLE` | Haiku |
+| ` simple.` | Haiku |
+| `COMPLEX` | strong model |
+| `I think SIMPLE` | strong model |
+| *(empty)* | strong model |
+
+Not covered: the **New session** button, and `turn.step` actually swapping the model on a live session (check it by hand with the status line).
+
+---
+
+## Development
+
+Run Claude Code with the mod loaded straight from this folder:
+
+```
+claude --plugin-dir .
+```
+
+Validate the manifest and the module the way the engine will read them:
+
+```
+claude plugin validate .
+```
+
+Type-check (the engine writes the types into `.claude-plugin/types/` the first time it loads the mod):
+
+```
+npx tsc -p .
+```
+
+To see a switch by hand: send a simple prompt, then a complex one, then a simple one, watching the status line; the band appears after the third.
+
+---
+
+## Customizing
+
+Everything lives in `hooks/register.tsx`.
+
+- **Change the cheap model:** change `CHEAP` (`'haiku'`).
+- **Change what counts as simple:** edit the `SIMPLE:` / `COMPLEX:` lines of `ASK`. Keep "When unsure, reply COMPLEX" so mistakes cost money, not quality.
+- **Warn sooner or later:** change `SWITCH_WARN_AT` (`3`).
+- **Give the classifier more time:** change `timeoutMs` (`4000`) in the `turn.start` hook.
+
+---
+
+## Limits and known trade-offs
+
+- **The classifier sees only the prompt, not the conversation.** A bare follow-up ("yes", "go on", "fix it") has no context, so it usually goes to the strong model, which can mean an extra switch.
+- **Every turn costs one Haiku call** (the prompt plus about 5 output tokens) and up to 4 s of waiting before the turn starts.
+- **Switching rebuilds the prompt cache.** In a long session, frequent switches can cost more than they save; that is what [the warning](#the-switch-warning) is for.
+- **It misjudges sometimes.** A hard task worded simply may run on Haiku; resend it reworded, or switch the mod off for that session.
+- **Only the main loop is routed.** Subagents use whatever model they were given.
+- **The switch count is per session**, held in memory: it starts over on `/clear` and on restart.
+
+---
+
+## FAQ
+
+**Will it ever use a model stronger than mine?**
+No. It only routes down to Haiku; a complex turn uses exactly the model `/model` set.
+
+**My `/model` is already Haiku. Does it do anything?**
+Every turn runs on Haiku either way; the classification is wasted. Switch the mod off.
+
+**What happens if Haiku is down or slow?**
+After 4 s, or on any error, the turn runs on your model as if the mod were not there.
+
+**Does it send my prompt anywhere new?**
+Only to Haiku, through the same Claude Code connection your session already uses.
+
+---
+
+## License
+
+[MIT](LICENSE) © 2026 webdiego

@@ -1,0 +1,11 @@
+{
+  "name": "model-router",
+  "version": "0.1.0",
+  "description": "Runs simple prompts on Haiku and keeps the session's model for the hard ones, to save cost",
+  "author": {
+    "name": "webdiego"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "icon": "./.claude-plugin/icon.png"
+}

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="330" viewBox="0 0 900 330" font-family="SFMono-Regular, Menlo, Consolas, monospace" font-size="15">
+  <rect width="900" height="330" rx="12" fill="#1a1b26"/>
+  <rect width="900" height="36" rx="12" fill="#16161e"/>
+  <rect y="24" width="900" height="12" fill="#16161e"/>
+  <circle cx="22" cy="18" r="6" fill="#f7768e"/><circle cx="42" cy="18" r="6" fill="#e0af68"/><circle cx="62" cy="18" r="6" fill="#9ece6a"/>
+  <text x="450" y="23" fill="#565f89" text-anchor="middle" font-size="13">claude — model-router</text>
+
+  <text x="24" y="76" fill="#565f89">&gt;</text>
+  <text x="44" y="76" fill="#c0caf5">explain what ls -la does in the terminal, briefly</text>
+  <text x="24" y="104" fill="#c0caf5">⏺</text>
+  <text x="44" y="104" fill="#c0caf5">It lists the folder in long format (-l), hidden files included (-a).</text>
+
+  <text x="24" y="144" fill="#565f89">&gt;</text>
+  <text x="44" y="144" fill="#c0caf5">debug why the session token expires right after the refresh</text>
+  <text x="24" y="172" fill="#c0caf5">⏺</text>
+  <text x="44" y="172" fill="#c0caf5">The refresh handler writes the new token before the old one is revoked…</text>
+
+  <!-- the switch warning band (AbovePrompt) -->
+  <text x="24" y="214" fill="#e0af68">Model switched 3 times: each switch rebuilds the prompt cache.</text>
+  <rect x="610" y="198" width="124" height="24" rx="4" fill="none" stroke="#7aa2f7"/>
+  <text x="672" y="215" fill="#7aa2f7" text-anchor="middle">New session</text>
+  <rect x="746" y="198" width="88" height="24" rx="4" fill="none" stroke="#565f89"/>
+  <text x="790" y="215" fill="#a9b1d6" text-anchor="middle">Dismiss</text>
+
+  <rect x="24" y="234" width="852" height="42" rx="6" fill="none" stroke="#3b4261"/>
+  <text x="40" y="260" fill="#565f89">&gt;</text>
+
+  <!-- status line -->
+  <text x="24" y="306" fill="#bb9af7" font-weight="bold">🧠 opus</text>
+  <text x="110" y="306" fill="#565f89">· the last turn was COMPLEX; a SIMPLE one shows</text>
+  <text x="566" y="306" fill="#e0af68" font-weight="bold">⚡ haiku</text>
+</svg>

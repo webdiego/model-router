@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" font-family="SFMono-Regular, Menlo, Consolas, monospace">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1a1b26"/>
+      <stop offset="1" stop-color="#24283b"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="400" rx="20" fill="url(#bg)"/>
+  <rect x="1" y="1" width="1278" height="398" rx="19" fill="none" stroke="#3b4261" stroke-width="2"/>
+
+  <!-- logo, 1024 → 240 -->
+  <g transform="translate(80 80) scale(0.234375)">
+    <rect width="1024" height="1024" rx="224" fill="#16161e" stroke="#3b4261" stroke-width="8"/>
+    <g fill="none" stroke-width="48" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M232 512 H440" stroke="#c0caf5"/>
+      <path d="M440 512 C540 512 560 320 680 320 H760" stroke="#e0af68"/>
+      <path d="M440 512 C540 512 560 704 680 704 H760" stroke="#bb9af7"/>
+    </g>
+    <circle cx="232" cy="512" r="56" fill="#c0caf5"/><circle cx="792" cy="320" r="64" fill="#e0af68"/><circle cx="792" cy="704" r="64" fill="#bb9af7"/>
+  </g>
+
+  <text x="380" y="160" fill="#c0caf5" font-size="64" font-weight="bold">model-router</text>
+  <text x="382" y="204" fill="#a9b1d6" font-size="22">Simple prompts on Haiku, hard ones on your model.</text>
+  <text x="382" y="236" fill="#565f89" font-size="18">A Claude Code mod · one 5-token check per turn · routes down, never up</text>
+
+  <text x="382" y="300" fill="#a9b1d6" font-size="20">what does ls -la do?</text>
+  <text x="760" y="300" fill="#565f89" font-size="20">→</text>
+  <text x="796" y="300" fill="#e0af68" font-size="20" font-weight="bold">⚡ haiku</text>
+  <text x="382" y="336" fill="#a9b1d6" font-size="20">refactor the auth module</text>
+  <text x="760" y="336" fill="#565f89" font-size="20">→</text>
+  <text x="796" y="336" fill="#bb9af7" font-size="20" font-weight="bold">🧠 opus</text>
+</svg>

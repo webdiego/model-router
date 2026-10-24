@@ -1,0 +1,13 @@
+{
+  "name": "model-router",
+  "description": "Claude Code mod that runs simple prompts on Haiku and keeps your chosen model for the hard ones",
+  "owner": {
+    "name": "webdiego"
+  },
+  "plugins": [
+    {
+      "name": "model-router",
+      "source": "./"
+    }
+  ]
+}
